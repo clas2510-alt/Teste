@@ -1,0 +1,11 @@
+# Credenciais reais do Supabase - nunca commitar
+config.js
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
