@@ -978,6 +978,13 @@ Até <strong>5 veículos por horário</strong>.
 
 <br><br>
 
+<strong>Travas para caixas (transportadoras):</strong>
+Agendamento com <strong>1.000 caixas ou mais</strong> trava <strong>1 vaga por 3 horas</strong>.
+Não é permitido mais de <strong>1 agendamento de 900 caixas ou mais</strong> na mesma hora.
+O administrador não possui estas travas, e ao <strong>finalizar o carregamento</strong> as horas sobrantes são liberadas.
+
+<br><br>
+
 <strong>Antecedência mínima:</strong>
 Transportadoras somente podem realizar agendamentos com
 <strong>12 horas de antecedência</strong>. O administrador não possui esta trava.
@@ -2204,6 +2211,7 @@ botao.classList.contains("full")
 ){
 
 alert(
+botao.dataset.motivo ||
 "Esta janela já atingiu o limite de 5 veículos."
 );
 
@@ -2224,17 +2232,98 @@ botao.innerText;
 }
 
 
+/* ================= TRAVAS DE CAIXAS ================= */
+
+/*
+ * - Agendamento com 1.000 caixas ou mais: trava 1 vaga por 3 horas
+ *   (horário de início + 2 horas seguintes).
+ * - Agendamento com 900 caixas ou mais: máximo de 1 por hora.
+ * Valem apenas para embalagem "Caixa"; paletes não entram na regra.
+ */
+const CAIXAS_TRAVA_VAGA = 1000;
+const DURACAO_TRAVA_VAGA_MIN = 180;
+const CAIXAS_LIMITE_MESMA_HORA = 900;
+
+function horaParaMinutos(h){
+  const p=String(h||"").trim().split(":").map(Number);
+  if(p.length!==2 || p.some(Number.isNaN)) return null;
+  return p[0]*60+p[1];
+}
+
+function qtdCaixas(i){
+  return i.tipoEmbalagem==="Caixa"
+    ? (parseInt(i.qtdVolumes,10)||0)
+    : 0;
+}
+
+function agendamentosAtivosDia(data){
+  return obterDados().filter(
+    i => i.data===data && i.status!=="Cancelado"
+  );
+}
+
+function horariosDisponiveis(){
+  return Array.from(document.querySelectorAll(".time"))
+    .map(b=>b.innerText.trim());
+}
+
+/* Vagas ocupadas numa janela: agendamentos que começam nela +
+   agendamentos de 1.000+ caixas iniciados antes e ainda em andamento (3h). */
+function ocupacaoHorario(data,hora){
+  const s=horaParaMinutos(hora);
+  return agendamentosAtivosDia(data).filter(i=>{
+    if(i.horario===hora) return true;
+    /* Administrador não sofre a trava de 3h; ao finalizar o carregamento
+       a trava é encerrada e o horário sobrante fica liberado. */
+    if(ehTransportadora() &&
+       qtdCaixas(i)>=CAIXAS_TRAVA_VAGA &&
+       i.status!=="Finalizado" && !i.fim){
+      const ini=horaParaMinutos(i.horario);
+      return ini!==null && s!==null &&
+        s>=ini && s<ini+DURACAO_TRAVA_VAGA_MIN;
+    }
+    return false;
+  }).length;
+}
+
 function horarioLotado(data,hora){
+  return ocupacaoHorario(data,hora) >= LIMITE_POR_HORARIO;
+}
 
-return obterDados()
-.filter(
-i =>
-i.data===data &&
-i.horario===hora &&
-i.status!=="Cancelado"
-)
-.length >= LIMITE_POR_HORARIO;
+/* Retorna o motivo do bloqueio ("" se estiver liberado). */
+function motivoBloqueioCaixas(data,hora,tipo,qtd){
+  if(!data || !hora) return "";
+  /* Administrador não sofre as travas de caixas. */
+  if(!ehTransportadora()) return "";
+  const q = tipo==="Caixa" ? (parseInt(qtd,10)||0) : 0;
+  const s = horaParaMinutos(hora);
+  if(s===null) return "";
 
+  if(q>=CAIXAS_LIMITE_MESMA_HORA){
+    const h=Math.floor(s/60);
+    const conflito=agendamentosAtivosDia(data).some(i=>{
+      const m=horaParaMinutos(i.horario);
+      return qtdCaixas(i)>=CAIXAS_LIMITE_MESMA_HORA &&
+        m!==null && Math.floor(m/60)===h;
+    });
+    if(conflito){
+      return "Já existe um agendamento de 900 caixas ou mais nesta hora (limite de 1 por hora).";
+    }
+  }
+
+  if(q>=CAIXAS_TRAVA_VAGA){
+    const bloqueado=horariosDisponiveis().find(x=>{
+      const m=horaParaMinutos(x);
+      return m!==null &&
+        m>=s && m<s+DURACAO_TRAVA_VAGA_MIN &&
+        horarioLotado(data,x);
+    });
+    if(bloqueado){
+      return "Agendamento de 1.000 caixas ou mais trava 1 vaga por 3 horas, e o horário "+bloqueado+" não tem vaga disponível.";
+    }
+  }
+
+  return "";
 }
 
 
@@ -2378,6 +2467,16 @@ horarioPermitido12h(data,b.innerText);
 const lotado =
 horarioLotado(data,b.innerText);
 
+const motivoCaixas =
+motivoBloqueioCaixas(
+data,
+b.innerText.trim(),
+document.getElementById("f_tipoEmbalagem").value,
+document.getElementById("f_qtdVolumes").value
+);
+
+b.dataset.motivo = motivoCaixas;
+
 b.classList.toggle(
 "holiday-locked",
 bloqueadoPorData
@@ -2390,7 +2489,7 @@ b.classList.toggle(
 
 b.classList.toggle(
 "full",
-!bloqueadoPorData && lotado
+!bloqueadoPorData && (lotado || !!motivoCaixas)
 );
 
 b.title =
@@ -2400,6 +2499,8 @@ bloqueadoPorData
 ? "Bloqueado: mínimo de 12 horas de antecedência"
 : lotado
 ? "Janela lotada"
+: motivoCaixas
+? motivoCaixas
 : "Horário disponível";
 }
 );
@@ -2415,6 +2516,15 @@ if(bloqueadoPorData){
   );
 }else{
   document.getElementById("f_data").setCustomValidity("");
+}
+
+if(horaSelecionada){
+  const btnSel=Array.from(document.querySelectorAll(".time"))
+    .find(b=>b.innerText.trim()===horaSelecionada);
+  if(btnSel && btnSel.classList.contains("full")){
+    horaSelecionada="";
+    btnSel.classList.remove("selected");
+  }
 }
 
 if(
@@ -2463,6 +2573,12 @@ function(){
 
 /* Atualiza automaticamente a trava se o portal ficar aberto. */
 setInterval(atualizarHorarios,60000);
+
+/* Reavalia as travas de caixas quando tipo/quantidade mudam. */
+document.getElementById("f_qtdVolumes")
+  .addEventListener("input",atualizarHorarios);
+document.getElementById("f_tipoEmbalagem")
+  .addEventListener("change",atualizarHorarios);
 
 
 /* ================= TRAVA DE AJUDANTES ================= */
@@ -2634,6 +2750,24 @@ horaSelecionada
 alert(
 "A janela selecionada já atingiu o limite de 5 veículos."
 );
+
+return false;
+
+}
+
+const motivoCaixas =
+motivoBloqueioCaixas(
+campo("f_data"),
+horaSelecionada,
+campo("f_tipoEmbalagem"),
+campo("f_qtdVolumes")
+);
+
+if(motivoCaixas){
+
+alert("Agendamento bloqueado: "+motivoCaixas);
+
+atualizarHorarios();
 
 return false;
 
