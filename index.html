@@ -338,7 +338,7 @@ textarea:focus{
 
 .dashboard-grid{
   display:grid;
-  grid-template-columns:repeat(6,1fr);
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
   gap:15px;
   margin-bottom:20px;
 }
@@ -439,6 +439,16 @@ tr:hover td{
 .status-carregando{
   background:#fff0df;
   color:#c86b00;
+}
+
+.status-separacao{
+  background:#ede7f6;
+  color:#5e35b1;
+}
+
+.status-separado{
+  background:#e0f2f1;
+  color:#00796b;
 }
 
 .status-finalizado{
@@ -873,6 +883,11 @@ onclick="mostrarPagina('statusColeta')">
 Acompanhar Status
 </button>
 
+<button class="btn btn-gray"
+onclick="mostrarPagina('alterarDados')">
+Alterar Motorista/Veículo
+</button>
+
 <button id="btnPainel" class="btn btn-gray"
 onclick="abrirPainelOperacional()">
 Painel Operacional
@@ -940,6 +955,13 @@ onclick="mostrarPagina('statusColeta')">
 
 Acompanhar Status
 
+</button>
+
+<button
+id="tabAlterarDados"
+class="nav-tab"
+onclick="mostrarPagina('alterarDados')">
+Alterar Motorista/Veículo
 </button>
 
 </div>
@@ -1050,13 +1072,21 @@ maxlength="7">
 <div class="form-group col-3">
 
 <label>
-Ajudantes (calculado) *
+Ajudantes *
 </label>
 
 <input
 id="f_ajudantes"
-readonly
-placeholder="Preencha embalagem e volumes">
+type="number"
+min="1"
+step="1"
+placeholder="Preencha embalagem e volumes"
+oninput="ajudantesDigitado()"
+onchange="ajudantesConferir()">
+
+<small id="dicaAjudantes" style="margin-top:5px;font-size:11px;color:var(--muted)">
+Mínimo calculado automaticamente.
+</small>
 
 </div>
 
@@ -1450,6 +1480,74 @@ class="cancel-result">
 </section>
 
 
+<!-- ================= ALTERAR MOTORISTA / VEÍCULO ================= -->
+
+<section id="alterarDados" class="page">
+
+<div class="card">
+
+<div class="card-header">
+
+<h2>
+Alterar Motorista / Veículo
+</h2>
+
+<p>
+Troque o motorista, a placa ou o telefone sem perder o agendamento. Protocolo, data e horário permanecem os mesmos.
+</p>
+
+</div>
+
+<div class="card-body">
+
+<div class="alert">
+
+<strong>Atenção:</strong>
+somente <strong>nome do motorista, placa e telefone</strong> podem ser alterados.
+Não é possível alterar depois do início do carregamento, nem em coletas finalizadas ou canceladas.
+
+</div>
+
+<div class="grid">
+
+<div class="form-group col-12">
+
+<label>
+Localizar coleta
+</label>
+
+<input
+id="alterBusca"
+placeholder="Protocolo, PEDIDO ou Ordem de Coleta">
+
+</div>
+
+</div>
+
+<div class="actions">
+
+<button
+class="btn btn-blue"
+onclick="buscarAlterarDados()">
+
+CONSULTAR COLETA
+
+</button>
+
+</div>
+
+<div
+id="alterResult"
+class="cancel-result">
+</div>
+
+</div>
+
+</div>
+
+</section>
+
+
 <!-- ================= DASHBOARD ================= -->
 
 <section id="dashboard" class="page">
@@ -1502,6 +1600,32 @@ CHEGARAM
 </span>
 
 <strong id="kpiChegou">
+0
+</strong>
+
+</div>
+
+
+<div class="kpi purple">
+
+<span>
+EM SEPARAÇÃO
+</span>
+
+<strong id="kpiSeparacao">
+0
+</strong>
+
+</div>
+
+
+<div class="kpi purple">
+
+<span>
+SEPARADOS
+</span>
+
+<strong id="kpiSeparado">
 0
 </strong>
 
@@ -1598,6 +1722,14 @@ Confirmado
 
 <option>
 Chegou
+</option>
+
+<option>
+Em Separação
+</option>
+
+<option>
+Separado
 </option>
 
 <option>
@@ -1960,11 +2092,16 @@ function obterClienteSupabase(){
 }
 
 function _headersSupabase(extra){
-  return Object.assign({
+  const h = {
     "apikey": SUPABASE_ANON_KEY,
-    "Authorization": "Bearer "+SUPABASE_ANON_KEY,
     "Content-Type": "application/json"
-  }, extra||{});
+  };
+  /* Chaves antigas (anon) são JWT e vão no Authorization.
+     Chaves novas (sb_publishable_...) não são JWT: só vão em "apikey". */
+  if(String(SUPABASE_ANON_KEY).startsWith("eyJ")){
+    h["Authorization"] = "Bearer "+SUPABASE_ANON_KEY;
+  }
+  return Object.assign(h, extra||{});
 }
 
 // Converte do formato usado no app (camelCase) para as colunas do banco (snake_case)
@@ -2147,7 +2284,7 @@ function mostrarPagina(pagina){
     return;
   }
 
-  if((pagina==="agendamento" || pagina==="cancelamento" || pagina==="statusColeta") && !perfil){
+  if((pagina==="agendamento" || pagina==="cancelamento" || pagina==="statusColeta" || pagina==="alterarDados") && !perfil){
     abrirLogin();
     return;
   }
@@ -2167,6 +2304,10 @@ function mostrarPagina(pagina){
 
   if(pagina==="statusColeta"){
     document.getElementById("tabStatusColeta").classList.add("active");
+  }
+
+  if(pagina==="alterarDados"){
+    document.getElementById("tabAlterarDados").classList.add("active");
   }
 
   if(pagina==="dashboard"){
@@ -2610,15 +2751,69 @@ return "";
 }
 
 
+let ajudantesMinimo = 0;
+let ajudantesManual = false;
+
 function atualizarAjudantesCalculado(){
 
 const tipo = document.getElementById("f_tipoEmbalagem").value;
 const qtd = document.getElementById("f_qtdVolumes").value;
 
-const ajudantes = calcularAjudantesNecessarios(tipo, qtd);
+const minimo = calcularAjudantesNecessarios(tipo, qtd);
 
-document.getElementById("f_ajudantes").value =
-ajudantes === "" ? "" : ajudantes;
+const el = document.getElementById("f_ajudantes");
+const dica = document.getElementById("dicaAjudantes");
+
+if(minimo === ""){
+ajudantesMinimo = 0;
+ajudantesManual = false;
+el.value = "";
+el.min = 1;
+dica.innerText = "Preencha embalagem e volumes.";
+return;
+}
+
+ajudantesMinimo = minimo;
+el.min = minimo;
+
+const atual = parseInt(el.value, 10);
+
+/* mantém o valor digitado pela transportadora se ainda for >= ao mínimo */
+if(!ajudantesManual || !atual || atual < minimo){
+el.value = minimo;
+ajudantesManual = false;
+}
+
+dica.innerText =
+"Mínimo necessário: " + minimo +
+". Você pode informar mais, nunca menos.";
+
+}
+
+
+function ajudantesDigitado(){
+ajudantesManual = true;
+}
+
+
+function ajudantesConferir(){
+
+if(!ajudantesMinimo) return;
+
+const el = document.getElementById("f_ajudantes");
+const v = parseInt(el.value, 10);
+
+if(!v || v < ajudantesMinimo){
+
+alert(
+"A quantidade mínima de ajudantes para esta carga é " +
+ajudantesMinimo + "."
+);
+
+el.value = ajudantesMinimo;
+ajudantesManual = false;
+
+}
 
 }
 
@@ -2688,6 +2883,21 @@ return false;
 
 }
 
+
+const minAj = calcularAjudantesNecessarios(
+campo("f_tipoEmbalagem"),
+campo("f_qtdVolumes")
+);
+const ajInformado = parseInt(campo("f_ajudantes"), 10);
+
+if(minAj !== "" && (!ajInformado || ajInformado < minAj)){
+alert(
+"A quantidade mínima de ajudantes para esta carga é " + minAj + ". " +
+"Você pode informar mais, mas não menos."
+);
+document.getElementById("f_ajudantes").focus();
+return false;
+}
 
 if(!horaSelecionada){
 
@@ -2916,6 +3126,12 @@ return {
 "Chegou":
 "status-chegou",
 
+"Em Separação":
+"status-separacao",
+
+"Separado":
+"status-separado",
+
 "Em Carregamento":
 "status-carregando",
 
@@ -3103,6 +3319,8 @@ function atualizarKPIs(){
     kpiSolicitado:d.filter(i=>i.status==="Solicitado").length,
     kpiConfirmado:d.filter(i=>i.status==="Confirmado").length,
     kpiChegou:d.filter(i=>i.status==="Chegou").length,
+    kpiSeparacao:d.filter(i=>i.status==="Em Separação").length,
+    kpiSeparado:d.filter(i=>i.status==="Separado").length,
     kpiCarregando:d.filter(i=>i.status==="Em Carregamento").length,
     kpiFinalizado:d.filter(i=>i.status==="Finalizado").length,
     kpiCancelado:d.filter(i=>i.status==="Cancelado").length
@@ -3204,6 +3422,18 @@ modalBody.innerHTML=`
 </div>
 
 ${
+i.observacoes
+?
+`
+<div class="summary-row">
+<span>Observações</span>
+<strong style="white-space:pre-line;text-align:right">${i.observacoes}</strong>
+</div>
+`
+:""
+}
+
+${
 i.motivoCancelamento
 ?
 `
@@ -3237,6 +3467,14 @@ Confirmado
 
 <option>
 Chegou
+</option>
+
+<option>
+Em Separação
+</option>
+
+<option>
+Separado
 </option>
 
 <option>
@@ -3315,6 +3553,11 @@ i.chegada =
 i.chegada||agora;
 
 
+if(novo==="Em Separação" || novo==="Separado"){
+i.chegada =
+i.chegada||agora;
+}
+
 if(novo==="Em Carregamento"){
 
 i.chegada =
@@ -3363,6 +3606,29 @@ renderTabela();
 
 
 /* ================= CANCELAMENTO ================= */
+
+/* Trava de cancelamento: só é possível cancelar antes de a coleta chegar em "Separado".
+   Permitidos: Solicitado, Confirmado, Chegou, Em Separação.
+   Bloqueados: Separado, Em Carregamento, Finalizado. (Cancelado já é tratado à parte.) */
+const STATUS_PERMITE_CANCELAR = ["Solicitado","Confirmado","Chegou","Em Separação"];
+
+function cancelamentoPermitido(status){
+return STATUS_PERMITE_CANCELAR.includes(status);
+}
+
+function msgCancelamentoBloqueado(i){
+return `
+<div class="alert alert-warning">
+<strong>Cancelamento não permitido.</strong>
+<br><br>
+O protocolo <strong>${i.protocolo}</strong> está com status
+<strong>${i.status}</strong>.
+O cancelamento só pode ser feito antes de a coleta ficar como
+<strong>Separado</strong>. Em caso de necessidade, entre em contato
+com a expedição.
+</div>`;
+}
+
 
 function buscarCancelamento(){
 
@@ -3483,6 +3749,15 @@ ${i.motivoCancelamento||"-"}
 
 `;
 
+return;
+
+}
+
+
+if(!cancelamentoPermitido(i.status)){
+
+box.className = "cancel-result show";
+box.innerHTML = msgCancelamentoBloqueado(i);
 return;
 
 }
@@ -3881,6 +4156,18 @@ x=>x.id===id
 if(!i)return;
 
 
+if(!cancelamentoPermitido(i.status)){
+
+document.getElementById("cancelResult").innerHTML =
+msgCancelamentoBloqueado(i);
+
+renderTabela();
+
+return;
+
+}
+
+
 i.status="Cancelado";
 
 i.canceladoEm =
@@ -3926,6 +4213,166 @@ ${motivo}
 
 
 renderTabela();
+
+}
+
+
+/* ================= ALTERAR MOTORISTA / VEÍCULO ================= */
+
+/* Só dá para trocar motorista/placa/telefone antes do carregamento começar */
+const STATUS_BLOQUEIA_ALTERACAO = ["Em Carregamento","Finalizado","Cancelado"];
+
+
+function buscarAlterarDados(){
+
+const busca =
+document.getElementById("alterBusca")
+.value.trim().toLowerCase();
+
+const box =
+document.getElementById("alterResult");
+
+if(!busca){
+alert("Informe o Protocolo, PEDIDO ou Ordem de Coleta.");
+return;
+}
+
+const i = obterDados().find(x=>
+String(x.protocolo).toLowerCase()===busca ||
+String(x.pedido).toLowerCase()===busca ||
+String(x.ordem).toLowerCase()===busca
+);
+
+box.className = "cancel-result show";
+
+if(!i){
+box.innerHTML=`
+<div class="alert alert-danger">
+<strong>Coleta não localizada.</strong>
+<br><br>
+Verifique o Protocolo, PEDIDO ou Ordem de Coleta informado.
+</div>`;
+return;
+}
+
+if(STATUS_BLOQUEIA_ALTERACAO.includes(i.status)){
+box.innerHTML=`
+<div class="alert alert-warning">
+<strong>Alteração não permitida.</strong>
+<br><br>
+O protocolo ${i.protocolo} está com status <strong>${i.status}</strong>.
+Só é possível trocar motorista, placa e telefone antes do início do carregamento.
+</div>`;
+return;
+}
+
+box.innerHTML=`
+<div class="cancel-box" style="border-left-color:var(--blue)">
+
+<div class="cancel-title">Coleta localizada</div>
+
+<div class="summary">
+<div class="summary-row"><span>Protocolo</span><strong>${i.protocolo}</strong></div>
+<div class="summary-row"><span>Transportadora</span><strong>${i.transportadora}</strong></div>
+<div class="summary-row"><span>Data</span><strong>${formatarData(i.data)}</strong></div>
+<div class="summary-row"><span>Horário</span><strong>${i.horario}</strong></div>
+<div class="summary-row"><span>Status</span><strong><span class="status ${classeStatus(i.status)}">${i.status}</span></strong></div>
+</div>
+
+<br>
+
+<div class="grid">
+
+<div class="form-group col-6">
+<label>Motorista *</label>
+<input id="alt_motorista" placeholder="Nome completo">
+</div>
+
+<div class="form-group col-3">
+<label>Placa *</label>
+<input id="alt_placa" placeholder="ABC1D23" maxlength="7">
+</div>
+
+<div class="form-group col-3">
+<label>Telefone / WhatsApp *</label>
+<input id="alt_telefone" placeholder="(11) 99999-9999">
+</div>
+
+</div>
+
+<div class="actions">
+<button class="btn btn-green" onclick="salvarAlteracaoDados(${i.id})">
+SALVAR ALTERAÇÃO
+</button>
+</div>
+
+</div>`;
+
+document.getElementById("alt_motorista").value = i.motorista||"";
+document.getElementById("alt_placa").value = i.placa||"";
+document.getElementById("alt_telefone").value = i.telefone||"";
+
+}
+
+
+function salvarAlteracaoDados(id){
+
+const motorista = document.getElementById("alt_motorista").value.trim();
+const placa = document.getElementById("alt_placa").value.trim().toUpperCase();
+const telefone = document.getElementById("alt_telefone").value.trim();
+
+if(!motorista || !placa || !telefone){
+alert("Preencha motorista, placa e telefone.");
+return;
+}
+
+const dados = obterDados();
+const i = dados.find(x=>x.id===id);
+
+if(!i) return;
+
+if(STATUS_BLOQUEIA_ALTERACAO.includes(i.status)){
+alert("Esta coleta não pode mais ser alterada (status: "+i.status+").");
+return;
+}
+
+const mudancas = [];
+
+if(i.motorista!==motorista) mudancas.push("Motorista: "+i.motorista+" → "+motorista);
+if(i.placa!==placa) mudancas.push("Placa: "+i.placa+" → "+placa);
+if(i.telefone!==telefone) mudancas.push("Telefone: "+i.telefone+" → "+telefone);
+
+if(!mudancas.length){
+alert("Nenhum dado foi alterado.");
+return;
+}
+
+if(!confirm("Confirma a alteração? O agendamento, a data e o horário serão mantidos.")) return;
+
+const registro =
+"["+new Date().toLocaleString("pt-BR")+"] Dados alterados — "+mudancas.join("; ");
+
+i.motorista = motorista;
+i.placa = placa;
+i.telefone = telefone;
+i.observacoes = (i.observacoes ? i.observacoes+"\n" : "")+registro;
+
+salvarDados(dados);
+
+document.getElementById("alterResult").innerHTML=`
+<div class="alert">
+<strong>✓ Dados atualizados com sucesso.</strong>
+<br><br>
+Protocolo: <strong>${i.protocolo}</strong> (mantido)
+<br>
+Data/horário: ${formatarData(i.data)} às ${i.horario} (mantidos)
+<br><br>
+${mudancas.join("<br>")}
+</div>`;
+
+if(obterPerfil()==="admin" && document.getElementById("dashboard").classList.contains("active")){
+renderTabela();
+}
 
 }
 
